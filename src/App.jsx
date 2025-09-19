@@ -28,13 +28,31 @@ export default function App() {
       try {
         console.log("🚀 Initializing Telegram authentication...");
         const tgUser = await initTelegram();
-        
+
         if (!tgUser || !tgUser.id) {
           throw new Error("No valid Telegram user data received");
         }
-        
+
         console.log("✅ Authenticated Telegram user:", tgUser);
         setUserId(String(tgUser.id));
+
+        // Send user data to server for validation and DB update
+        if (window.Telegram?.WebApp?.initData) {
+          fetch(`${API}/webapp/validate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              initData: window.Telegram.WebApp.initData,
+              userData: tgUser
+            }),
+          }).then(r => r.json())
+            .then(result => {
+              console.log("✅ User validated:", result);
+            })
+            .catch(err => {
+              console.error("❌ Validation failed:", err);
+            });
+        }
         
         // Set up viewport height management for fullscreen mode
         const updateViewportHeight = () => {
@@ -139,8 +157,8 @@ export default function App() {
       </header>
 
       {/* Main content area - занимает всю доступную высоту */}
-      <main className="flex-1 flex flex-col min-h-0 w-full">
-        <div className="glass-card m-2 p-3 flex-1 flex flex-col min-h-0">
+      <main className="flex-1 flex flex-col min-h-0 w-full overflow-hidden">
+        <div className="glass-card m-2 p-3 flex-1 flex flex-col min-h-0 overflow-y-auto">
           {loadingAuth ? (
             <div className="flex-1 flex items-center justify-center">
               <span className="neon-text">Авторизация...</span>
