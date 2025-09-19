@@ -1,11 +1,10 @@
-// server/server.js
 import express from "express";
 import bodyParser from "body-parser";
 import cors from "cors";
 import crypto from "crypto";
 import dotenv from "dotenv";
-import db from "./db.js";
-
+import sqlite3pkg from "sqlite3";
+const sqlite3 = sqlite3pkg.verbose();
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -14,13 +13,42 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const dbPath = path.join(__dirname, "database.sqlite");
+const db = new sqlite3.Database(dbPath);
+
+db.serialize(() => {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY UNIQUE,
+      balance REAL,
+      gifts TEXT,
+      username TEXT,
+      first_name TEXT,
+      last_name TEXT,
+      photo_url TEXT,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+  `, (err) => {
+    if (err) {
+      console.error("Failed to create users table:", err);
+      return;
+    }
+    console.log("Users table ready");
+  });
+
+  db.run(`ALTER TABLE users ADD COLUMN username TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN first_name TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN last_name TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN photo_url TEXT`, () => {});
+  db.run(`ALTER TABLE users ADD COLUMN updated_at DATETIME DEFAULT CURRENT_TIMESTAMP`, () => {});
+});
+
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
 app.use(express.static(path.join(__dirname, "public")));
 
-/* ---------------- Telegram validate ---------------- */
 const BOT_TOKEN = process.env.BOT_TOKEN;
 if (!BOT_TOKEN) {
   console.error("BOT_TOKEN is missing in .env");
@@ -45,13 +73,11 @@ function checkSignature(initData) {
   return _hash === hash;
 }
 
-/* ---------------- State: Crash ---------------- */
 let crashClients = [];
 let currentCrashRound = null;
 let crashBets = {};
 let crashHistory = [];
 
-/* ---------------- State: Roulette ---------------- */
 let rouletteClients = [];
 let currentRouletteRound = null;
 let rouletteBets = {};
@@ -60,7 +86,6 @@ let rouletteWaitingTimer = null;
 let rouletteBettingTimer = null;
 let rouletteEndRoundTimer = null;
 
-/* ---------------- SSE helpers ---------------- */
 function safeWrite(res, data) {
   try {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -83,7 +108,6 @@ function broadcastToRoulette(data) {
   });
 }
 
-/* ---------------- Logic: Roulette ---------------- */
 function resetRouletteRound() {
   currentRouletteRound = {
     status: "waiting",
@@ -98,7 +122,7 @@ function resetRouletteRound() {
 
 function startRouletteBettingCountdown() {
   if (rouletteBettingTimer) clearInterval(rouletteBettingTimer);
-  let countdown = 20; // Увеличено до 20 секунд
+  let countdown = 20;
   currentRouletteRound.status = "betting";
   currentRouletteRound.countdown = countdown;
   broadcastToRoulette({ type: "status", status: "betting", countdown, message: "Прием ставок..." });
@@ -126,7 +150,7 @@ function endRouletteBetting() {
 
   setTimeout(() => {
     finishRouletteRound(totalDegrees);
-  }, 8500); 
+  }, 8500);
 }
 
 function finishRouletteRound(totalDegrees) {
@@ -180,14 +204,12 @@ function finishRouletteRound(totalDegrees) {
   }
 }
 
-/* ---------------- SSE endpoints ---------------- */
 app.get("/api/crash/stream", (req, res) => {
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
   res.setHeader("Connection", "keep-alive");
   res.flushHeaders();
 
-  // Fetch user data for bets
   const betsWithUserData = Object.values(crashBets);
   Promise.all(betsWithUserData.map(bet => 
     new Promise(resolve => {
@@ -227,7 +249,6 @@ app.get("/api/roulette/stream", (req, res) => {
   
   const betsArray = Object.values(rouletteBets).slice().sort((a, b) => b.amount - a.amount);
   
-  // Fetch user data for bets
   Promise.all(betsArray.map(bet => 
     new Promise(resolve => {
       db.get("SELECT username, first_name, last_name, photo_url FROM users WHERE id = ?", [bet.userId], (err, user) => {
@@ -259,7 +280,6 @@ app.get("/api/roulette/stream", (req, res) => {
   });
 });
 
-/* ---------------- API: Telegram validate ---------------- */
 app.post("/webapp/validate", (req, res) => {
   const { initData } = req.body;
   if (!initData) {
@@ -329,7 +349,6 @@ app.post("/webapp/validate", (req, res) => {
   }
 });
 
-// Helper function to update or create user
 function updateOrCreateUser(telegramUser) {
   return new Promise((resolve, reject) => {
     const { id, username, first_name, last_name, photo_url } = telegramUser;
@@ -341,7 +360,6 @@ function updateOrCreateUser(telegramUser) {
       }
       
       if (row) {
-        // Update existing user
         db.run(`UPDATE users SET 
                  username = ?, 
                  first_name = ?, 
@@ -358,7 +376,6 @@ function updateOrCreateUser(telegramUser) {
           }
         });
       } else {
-        // Create new user
         const gifts = JSON.stringify([]);
         db.run(`INSERT INTO users 
                 (id, balance, gifts, username, first_name, last_name, photo_url) 
@@ -376,7 +393,6 @@ function updateOrCreateUser(telegramUser) {
   });
 }
 
-/* ---------------- API: Create user if doesn't exist ---------------- */
 app.post("/api/user/create", (req, res) => {
   const { userId, userData } = req.body;
   
@@ -451,7 +467,6 @@ app.post("/api/user/create", (req, res) => {
   });
 });
 
-/* ---------------- API: get user ---------------- */
 app.get("/api/user/:id", (req, res) => {
   const { id } = req.params;
   db.get("SELECT * FROM users WHERE id = ?", [id], (err, row) => {
@@ -466,7 +481,6 @@ app.get("/api/user/:id", (req, res) => {
   });
 });
 
-/* ---------------- API: Crash ---------------- */
 app.post("/api/crash/bet", (req, res) => {
   const { userId, amount } = req.body;
   
@@ -480,11 +494,10 @@ app.post("/api/crash/bet", (req, res) => {
     if (!user) return res.status(404).json({ error: "User not found" });
     if (user.balance < amount) return res.status(400).json({ error: "Недостаточно средств" });
 
-    db.run("UPDATE users SET balance = balance - ? WHERE id = ?", [amount, userId], function (err2) => {
+    db.run("UPDATE users SET balance = balance - ? WHERE id = ?", [amount, userId], function (err2) {
       if (err2) return res.status(500).json({ error: "DB error" });
       db.run("UPDATE users SET balance = balance + ? WHERE id = 0", [amount], function () {
         
-        // Get user data for bet
         db.get("SELECT username, first_name, last_name, photo_url FROM users WHERE id = ?", [userId], (err, userData) => {
           const betData = { 
             userId: Number(userId), 
@@ -514,7 +527,7 @@ app.post("/api/crash/cashout", (req, res) => {
   const win = +(crashBets[userId].amount * multiplier).toFixed(2);
   db.run("UPDATE users SET balance = balance - ? WHERE id = 0", [win], function (err) {
     if (err) return res.status(500).json({ error: "DB error" });
-    db.run("UPDATE users SET balance = balance + ? WHERE id = ?", [win, userId], function (err2) => {
+    db.run("UPDATE users SET balance = balance + ? WHERE id = ?", [win, userId], function (err2) {
       if (err2) return res.status(500).json({ error: "DB error" });
       crashBets[userId].status = "cashed";
       crashBets[userId].win = win;
@@ -524,7 +537,6 @@ app.post("/api/crash/cashout", (req, res) => {
   });
 });
 
-/* ---------------- API: Roulette ---------------- */
 app.post("/api/roulette/bet", (req, res) => {
   const { userId, amount } = req.body;
 
@@ -551,13 +563,12 @@ app.post("/api/roulette/bet", (req, res) => {
     
     const isFirstBet = Object.keys(rouletteBets).length === 0;
 
-    db.run("UPDATE users SET balance = balance - ? WHERE id = ?", [betAmount, userId], function (err2) => {
+    db.run("UPDATE users SET balance = balance - ? WHERE id = ?", [betAmount, userId], function (err2) {
       if (err2) {
         return res.status(500).json({ error: "Ошибка при списании средств" });
       }
       db.run("UPDATE users SET balance = balance + ? WHERE id = 0", [betAmount], function () {
         
-        // Get user data for bet
         db.get("SELECT username, first_name, last_name, photo_url FROM users WHERE id = ?", [userId], (err, userData) => {
           if (!rouletteBets[userId]) {
             rouletteBets[userId] = { 
@@ -590,7 +601,6 @@ app.post("/api/roulette/bet", (req, res) => {
 
             if (rouletteWaitingTimer) clearTimeout(rouletteWaitingTimer);
             
-            // Create interval for countdown
             const countdownInterval = setInterval(() => {
               countdown--;
               currentRouletteRound.countdown = countdown;
@@ -637,7 +647,6 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(__dirname, "public/index.html"));
 });
 
-// Crash algorithm
 function generateCrashRound(immediateCrashDivisor = 50, houseEdge = 0.01) {
   if (immediateCrashDivisor && Math.floor(Math.random() * immediateCrashDivisor) === 0) {
     return 1.0;
@@ -650,13 +659,11 @@ function generateCrashRound(immediateCrashDivisor = 50, houseEdge = 0.01) {
   return Math.max(1.0, +crashPoint.toFixed(2));
 }
 
-/* ---------------- start loops ---------------- */
 function startCrashLoop() {
   const runRound = () => {
     crashBets={};
     currentCrashRound={status:"betting", countdown:10};
     
-    // Broadcast with enriched bets data
     const enrichBetsAndBroadcast = () => {
       Promise.all(Object.values(crashBets).map(bet => 
         new Promise(resolve => {
@@ -683,7 +690,6 @@ function startCrashLoop() {
     
     enrichBetsAndBroadcast();
 
-    // Countdown interval
     let countdown = 10;
     const countdownInterval = setInterval(() => {
       countdown--;
