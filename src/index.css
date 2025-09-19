@@ -178,6 +178,13 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Scrollable page containers */
+.page-container {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  height: 100%;
+}
+
 @media (max-width: 640px) {
   .bet-list-container {
     max-height: 25vh;
