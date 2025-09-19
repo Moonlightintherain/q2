@@ -281,15 +281,28 @@ app.get("/api/roulette/stream", (req, res) => {
 });
 
 app.post("/webapp/validate", (req, res) => {
-  const { initData } = req.body;
+  const { initData, userData } = req.body;
   if (!initData) {
     return res.status(400).json({ ok: false, error: "no initData provided" });
   }
 
   console.log("🔍 Validating initData:", initData);
 
+  // Development mode without BOT_TOKEN
   if (!BOT_TOKEN) {
     console.warn("⚠️ Skipping signature validation - no BOT_TOKEN (development mode)");
+    
+    // Use userData if provided, otherwise parse from initData
+    if (userData && userData.id) {
+      updateOrCreateUser(userData).then(() => {
+        return res.json({ ok: true, user: userData });
+      }).catch(err => {
+        console.error("Failed to create/update user:", err);
+        return res.status(500).json({ ok: false, error: "Database error" });
+      });
+      return;
+    }
+    
     const params = new URLSearchParams(initData);
     const userRaw = params.get("user");
     if (!userRaw) {
@@ -623,9 +636,14 @@ app.post("/api/roulette/bet", (req, res) => {
               }
             }, 60000);
             
-          } else if (currentRouletteRound.status === "waitingForPlayers") {
-            clearTimeout(rouletteWaitingTimer);
-            rouletteWaitingTimer = null;
+          } else if (currentRouletteRound.status === "waitingForPlayers" && Object.keys(rouletteBets).length >= 2) {
+            // Clear the waiting timer and its interval
+            if (rouletteWaitingTimer) {
+              clearTimeout(rouletteWaitingTimer);
+              rouletteWaitingTimer = null;
+            }
+            // Clear any existing countdown interval
+            broadcastToRoulette({ type: "clearWaitingCountdown" });
             startRouletteBettingCountdown();
           }
           
